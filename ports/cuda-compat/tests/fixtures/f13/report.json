@@ -1,49 +1,7 @@
 {
   "schema_version": 1,
-  "status": "cpu_arithmetic_proof_complete",
-  "gpu_used": false,
-  "quality_accepted": false,
-  "exhaustive_pairs": {
-    "e4_code_pairs": 65536,
-    "shared_exponent_deltas": [
-      0,
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27,
-      28,
-      29,
-      30,
-      31
-    ],
-    "compared_product_alignments": 2097152,
-    "mismatches": 0,
-    "maximum_product_mantissa": 225,
-    "maximum_aligned_product_units": 28800
-  },
+  "scope": "Independent synthetic F13 arithmetic inputs and expected results.",
+  "generator": "tools/generate_numeric_fixtures.py",
   "files": [
     {
       "file": "f13-integer-groups.bin",
@@ -61,7 +19,6 @@
       "k": 32,
       "n": 5,
       "partition": 0,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     },
     {
@@ -72,7 +29,6 @@
       "k": 128,
       "n": 19,
       "partition": 64,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     },
     {
@@ -83,7 +39,6 @@
       "k": 128,
       "n": 7,
       "partition": 32,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     },
     {
@@ -94,7 +49,6 @@
       "k": 1024,
       "n": 3,
       "partition": 256,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     },
     {
@@ -105,7 +59,6 @@
       "k": 80,
       "n": 5,
       "partition": 32,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     },
     {
@@ -116,10 +69,7 @@
       "k": 4096,
       "n": 3,
       "partition": 1024,
-      "prepublication_mismatches": 0,
       "layout": "4 u32 M,K,N,partition; A f16; W f16; residual f16; scale f16; expected f32; raw RTZ f16; E4 u8. Arrays row-major, little endian."
     }
-  ],
-  "scope": "Synthetic arithmetic equivalence and independent GPU test fixtures; no measured GPU speed or model quality.",
-  "tool_sha256": "c94cab9f68419b7545022e23c1b07b03b4df0449c01e8303dca53cce1dd0e97f"
+  ]
 }

@@ -17,7 +17,7 @@ validation status and tested configurations are in [validation.md](docs/validati
 
 - Linux x86-64 and an SM75 CUDA device; this contribution targets the 6 GiB RTX 2060.
 - CUDA Toolkit 12.6.3, CMake 3.24 or later, a compatible C++17 host compiler and Ninja.
-- A compatible NVIDIA driver, CUDA 12 runtime and cuBLAS shared libraries.
+- A compatible NVIDIA driver and CUDA 12 runtime shared library.
 - Python 3.10 or later and NumPy 1.24 or later. Python help, model conversion and
   CPU tests do not load CUDA. The `info` command does initialize the device.
 - User-supplied 310.8.0 weights in the [upstream model layout](../../README.md#model-directory).
@@ -41,8 +41,8 @@ python -m opendlss_cuda info --library "$PWD/ports/cuda-compat/build/libnr_cuda.
 ```
 
 The Python wheel contains the Python interface. Build the native library
-separately and pass its absolute path. Make the installed CUDA runtime and
-cuBLAS available to the Linux loader using its normal search configuration or
+separately and pass its absolute path. Make the installed CUDA runtime
+available to the Linux loader using its normal search configuration or
 `LD_LIBRARY_PATH`. The source contribution does not redistribute these libraries.
 
 ## Convert weights
@@ -61,8 +61,8 @@ directories are refused. Keep original weights and converted caches outside Git.
 Use a C-order float32 NPY file of shape `[full_height, full_width, 16]`. Values
 must be finite and have absolute value at most 65504. Geometry is explicit:
 1280×720 valid pixels use a **1344×768** padded field under the upstream rule.
-The default is `upstream`. `legacy_belvedere` is an explicit compatibility option
-for existing callers; it uses 1280×768 for the same valid dimensions.
+The default is `upstream`. The `legacy_belvedere` geometry uses 1280×768 for
+existing feature tensors with that padding rule.
 
 ```sh
 python -m opendlss_cuda run-features \

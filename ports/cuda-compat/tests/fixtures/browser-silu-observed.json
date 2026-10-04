@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Observed Chrome/Vulkan SiLU behavior on Lenovo RTX2060; finite-half inputs only; not canonical Ada arithmetic",
+  "scope": "Observed Chrome/Vulkan SiLU behavior on RTX 2060; finite-half inputs.",
   "fixture_sha256": "9c9c1b971054a2f0bdbfe263567bf2f64ffaaab945901f4dae329ee614e57b23",
   "bytes": 262144,
   "records": 65536,
@@ -30,5 +30,11 @@
       "channels": "1",
       "format": "e4"
     }
+  ],
+  "browser_version": "153.0.8010.52",
+  "browser_binary_sha256": "0f2256d365ab3d82a2c79ce41f65a03dfd8d7eaa4d689a1b88bc22b6842b1f1e",
+  "driver": "595.91.07",
+  "dawn_features": [
+    "vulkan_enable_f16_on_nvidia"
   ]
 }

@@ -1,5 +1,4 @@
-// Compatibility with captured Chrome/Vulkan SiLU tables on the Lenovo RTX2060.
-// This is an observed browser profile, not the canonical Ada arithmetic contract.
+// Publication rules for the captured Chrome/Vulkan compatibility profile.
 // Exhaustive finite-half answers are in tests/fixtures/browser-silu-observed.bin.
 #pragma once
 #include "kernels/numerics/numerics.cuh"
@@ -50,26 +49,32 @@ NR_BROWSER_HD __half browserHalfRtz(float value) {
 NR_BROWSER_HD uint8_t browserE4Code(float value) {
     const uint32_t original = browser_detail::floatBits(value);
     const uint32_t magnitude_bits = original & 0x7fffffffu;
-    if (magnitude_bits == 0u || magnitude_bits > 0x7f800000u) return 0;
+    if (magnitude_bits == 0u || magnitude_bits > 0x7f800000u)
+        return 0;
     const uint32_t sign = (original >> 24) & 0x80u;
-    if (magnitude_bits >= 0x43e00000u) return static_cast<uint8_t>(sign | 0x7eu);
+    if (magnitude_bits >= 0x43e00000u)
+        return static_cast<uint8_t>(sign | 0x7eu);
     uint32_t code;
     if (magnitude_bits < 0x3c800000u) {
         // E4 subnormal grid is 2^-9. Decode the f32 significand as an
         // integer, so host/device rounding modes cannot alter ties.
         const uint32_t exponent = magnitude_bits >> 23;
-        if (exponent < 117u) code = 0; // strictly below half the smallest E4
+        if (exponent < 117u)
+            code = 0; // strictly below half the smallest E4
         else {
             const uint32_t significand = (magnitude_bits & 0x7fffffu) | 0x800000u;
             code = numeric_detail::shiftRne(significand, 141u - exponent);
         }
     } else {
-        const uint32_t rounded = (magnitude_bits + 0x7ffffu + ((magnitude_bits >> 20) & 1u)) & 0xfff00000u;
+        const uint32_t rounded =
+            (magnitude_bits + 0x7ffffu + ((magnitude_bits >> 20) & 1u)) & 0xfff00000u;
         code = (rounded >> 20) - 960u;
     }
     return static_cast<uint8_t>(sign | code);
 }
-NR_BROWSER_HD __half browserPublishE4(float value) { return e4m3ToHalf(browserE4Code(value)); }
+NR_BROWSER_HD __half browserPublishE4(float value) {
+    return e4m3ToHalf(browserE4Code(value));
+}
 
 // Captured table behavior: two FP32 fused multiply-adds, one FP32 multiply,
 // and no half rounding between these operations. The caller supplies the
@@ -90,10 +95,13 @@ NR_BROWSER_HD uint8_t browserSiluCode(__half input) {
     // Observed input 0x8001 produces half -0 and packed +0. All other finite
     // inputs already agree with direct FP32 E4 publication. Express this as
     // the captured table's half-zero branch, not an input-specific exception.
-    if ((halfBits(browserHalfRtz(activated)) & 0x7fffu) == 0u) return 0;
+    if ((halfBits(browserHalfRtz(activated)) & 0x7fffu) == 0u)
+        return 0;
     return browserE4Code(activated);
 }
-NR_BROWSER_HD __half browserSiluE4(__half input) { return e4m3ToHalf(browserSiluCode(input)); }
+NR_BROWSER_HD __half browserSiluE4(__half input) {
+    return e4m3ToHalf(browserSiluCode(input));
+}
 } // namespace nr
 
 #undef NR_BROWSER_HD

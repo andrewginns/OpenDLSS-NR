@@ -173,7 +173,8 @@ class RuntimeABITests(unittest.TestCase):
         with mock.patch.object(module.C, 'CDLL', return_value=fake):
             with self.assertRaises(RuntimeError) as caught: module.Runtime(self.path)
         self.assertEqual(sum(name == 'nr_destroy' for name, _ in fake.calls), 1)
-        self.assertTrue(caught.exception.__notes__)
+        if hasattr(caught.exception, 'add_note'):
+            self.assertTrue(caught.exception.__notes__)
         runtime, fake = self.make(); fake.destroy_error = True
         original = ValueError('operator failed')
         with self.assertRaises(ValueError) as caught:
@@ -213,6 +214,30 @@ class RuntimeABITests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'closed'): operation()
         runtime.close()
         self.assertEqual(len(fake.calls), before)
+
+    def test_upsample_rejects_invalid_extent_and_raw_output_before_ffi(self):
+        runtime, fake = self.make()
+        source = runtime.empty((1, 32))
+        skip = runtime.empty((4, 32))
+        scale = runtime.empty((32,))
+        output = runtime.empty((4, 32))
+        raw = runtime.empty((4, 32))
+        small_raw = runtime.empty((1,))
+        extents = dict(in_width=1, in_height=1, out_width=2, out_height=2, channels=32)
+        before = len(fake.calls)
+        with self.assertRaisesRegex(ValueError, 'Upsample shape'):
+            runtime.upsample(source, skip, scale, output, raw_out=small_raw, **extents)
+        # Paired negative dimensions retain the expected element counts.
+        invalid = dict(in_width=-1, in_height=-1, out_width=-2, out_height=-2, channels=32)
+        with self.assertRaisesRegex(ValueError, 'positive integers'):
+            runtime.upsample(source, skip, scale, output, **invalid)
+        for key in extents:
+            for value in (0, -1, True, 1.5):
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, 'positive integers'):
+                    runtime.upsample(source, skip, scale, output, **dict(extents, **{key: value}))
+        self.assertEqual(len(fake.calls), before)
+        runtime.upsample(source, skip, scale, output, raw_out=raw, **extents)
+        self.assertEqual(fake.calls[-1][0], 'nr_up')
 
 
 if __name__ == '__main__': unittest.main()

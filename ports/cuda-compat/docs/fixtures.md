@@ -53,8 +53,8 @@ Use a small complete capture, such as the 320 by 320 field, for this bounded
 all-boundary test. It is not a head-only quality-corpus runner.
 
 The following schematic shows every required top-level field. Replace the
-placeholder hashes and include every boundary listed below; the ellipses are
-explanatory and are not accepted JSON values.
+placeholder hashes and include every boundary listed below; the ellipses mark
+placeholders that must be replaced with complete tensor descriptors.
 
 ```json
 {
@@ -134,8 +134,8 @@ Block 70 is represented by the complete four-channel head. The required
 boundary names follow the original graph capture points; there is no
 `transition-30-31` capture in this set. `required_boundary_shapes(geometry)`
 provides their shapes from the fixed graph schedule. The geometry's valid and
-padded dimensions must agree with its named rule (`upstream` or the explicit
-historical `legacy_belvedere` rule). Geometries are never silently substituted.
+padded dimensions must agree with its named rule (`upstream` or
+`legacy_belvedere`). Geometries are never silently substituted.
 
 Native captures contain half values. The comparator first requires each value
 to be exactly E4 representable, then independently maps its exact half bits to
@@ -174,17 +174,18 @@ expected results, with no model weights or images:
   multiple partitions, a partial final partition, tails and K=4096. The
   retained report records their original hashes and binary layout.
 
-Verify pinned references and independently regenerate every synthetic F13
-file, without a GPU:
+From the repository root, verify pinned references and independently regenerate
+every synthetic F13 file, without a GPU:
 
 ```sh
-python tools/generate_numeric_fixtures.py --verify tests/fixtures
+python ports/cuda-compat/tools/generate_numeric_fixtures.py \
+  --verify ports/cuda-compat/tests/fixtures
 ```
 
 To write only the seven synthetic F13 files to a fresh directory:
 
 ```sh
-python tools/generate_numeric_fixtures.py --out NEW_FIXTURE_DIRECTORY
+python ports/cuda-compat/tools/generate_numeric_fixtures.py --out NEW_FIXTURE_DIRECTORY
 ```
 
 The generator uses exact dyadic products in FP64 followed by integer grid

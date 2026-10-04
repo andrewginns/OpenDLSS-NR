@@ -10,16 +10,16 @@ from .geometry import geometry_from_valid, require_supported_geometry
 
 
 class NativeGraph:
-    """Fixed geometry graph. `capture_boundaries` is False, True or name iterable.
+    """Fixed geometry graph with optional capture of all 75 published boundaries.
 
-    True captures all upstream block/transition boundaries, which uses additional
-    VRAM. A name iterable also exposes selected operator intermediates, and requests
-    only those captures. Warm `record()` once
+    Boundary capture uses additional VRAM. Warm `record()` once
     before CUDA Graph capture so Runtime can prepare its operator scratch space.
     Subsequent records have no host uploads or graph-owned allocations.
     """
     def __init__(self, runtime, model, width, height, mode="upstream", *,
                  full_width=None, full_height=None, capture_boundaries=False):
+        if type(capture_boundaries) is not bool:
+            raise ValueError("capture_boundaries must be a bool")
         self.runtime, self.model = runtime, model
         self.geometry = geometry_from_valid(width, height, mode, full_width=full_width, full_height=full_height)
         require_supported_geometry(self.geometry)
@@ -29,15 +29,10 @@ class NativeGraph:
         self.buffers = {}
         self.boundaries = {}
         self.allocated_bytes = sum(a.nbytes for a in model.arrays.values())
-        self._capture_all = capture_boundaries is True
-        self._capture_names = set() if isinstance(capture_boundaries, bool) else set(capture_boundaries)
-        self._seen_boundary_names = set()
+        self._capture_boundaries = capture_boundaries
         self.features = self._alloc("features", (self.geometry["full_rows"], 16))
         self.head = self._alloc("head", (self.geometry["full_rows"], 4), "float32")
         self._build()
-        unknown = self._capture_names - self._seen_boundary_names
-        if unknown:
-            raise ValueError(f"unknown capture boundaries: {sorted(unknown)}")
 
     def _alloc(self, name, shape, dtype="float16"):
         if name not in self.buffers:
@@ -73,9 +68,8 @@ class NativeGraph:
     def _weight(self, block, name):
         return self.weights[f"block{block}.{name}"]
 
-    def _capture(self, name, tensor, *, explicit_only=False):
-        self._seen_boundary_names.add(name)
-        if name not in self._capture_names and (not self._capture_all or explicit_only):
+    def _capture(self, name, tensor):
+        if not self._capture_boundaries:
             return
         target = self._alloc("capture." + name, tuple(tensor.shape))
         self.boundaries[name] = target
@@ -101,77 +95,29 @@ class NativeGraph:
         output = output_b if state is output_a else output_a
         ffn = self._at(level, "ffn", c)
         ffn_raw = self._at(level, "ffn_raw", c) if c == 32 else None
-        detail = block in (5, 23, 31)
-        if detail:
-            self._capture(f"block{block}-input-state-e4", state, explicit_only=True)
-        if block == 31 and "block31-ffn-contract-half" in self._capture_names:
-            ffn_raw = self._at(level, "ffn_diagnostic_raw", c)
-        if block == 31 and "block31-projection-half" in self._capture_names:
-            raw_output = self._at(level, "projection_diagnostic_raw", c)
         residual = residual_override if residual_override is not None else state
         if c == 512:
             branch = self._at(level, "branch", 512)
             expanded = self._at(level, "expanded", 2048)
             narrow = self._at(level, "narrow", 512)
             self._gemm(block, "w1", state, branch)
-            if detail:
-                self._capture(f"block{block}-ffn-branch-e4", branch, explicit_only=True)
             self._gemm(block, "w2", branch, expanded, silu=True)
-            if detail:
-                self._capture(f"block{block}-ffn-expand-e4", expanded, explicit_only=True)
             self._gemm(block, "w3", expanded, narrow)
-            if detail:
-                self._capture(f"block{block}-ffn-narrow-e4", narrow, explicit_only=True)
             self._gemm(block, "contract", narrow, ffn, residual=residual, scale="ffn_skip")
         elif c in (64, 128, 256):
             expanded = self._at(level, "expanded", (c // 32) * 128)
             narrow = self._at(level, "narrow", c)
             self._gemm(block, "w1", state, expanded, silu=True, broadcast=True)
-            if detail:
-                self._capture(f"block{block}-ffn-expand-e4", expanded, explicit_only=True)
             self._gemm(block, "w2", expanded, narrow)
-            if detail:
-                self._capture(f"block{block}-ffn-narrow-e4", narrow, explicit_only=True)
             self._gemm(block, "w3", narrow, ffn, residual=residual, scale="ffn_skip")
         else:
             expanded = self._at(level, "expanded", 4096 if c == 1024 else 128)
-            if block == 0 and "block0-ffn-expand-pre-half" in self._capture_names:
-                pre = self._at(level, "expanded_preactivation_diagnostic", 128)
-                self._gemm(block, "w1", state, pre, quantize=False)
-                self.operation_names[-1] = "block0.w1.preactivation-diagnostic"
-                self._capture("block0-ffn-expand-pre-half", pre, explicit_only=True)
-            elif block == 0:
-                self._seen_boundary_names.add("block0-ffn-expand-pre-half")
-            if block == 31 and "block31-ffn-expand-pre-half" in self._capture_names:
-                pre = self._at(level, "expanded_preactivation_diagnostic", 4096)
-                self._gemm(block, "w1", state, pre, quantize=False)
-                self.operation_names[-1] = "block31.w1.preactivation-diagnostic"
-                self._capture("block31-ffn-expand-pre-half", pre, explicit_only=True)
-            elif block == 31:
-                self._seen_boundary_names.add("block31-ffn-expand-pre-half")
             self._gemm(block, "w1", state, expanded, silu=True)
-            if block == 0:
-                self._capture("block0-ffn-expand-e4", expanded, explicit_only=True)
-            if detail:
-                self._capture(f"block{block}-ffn-expand-e4", expanded, explicit_only=True)
             self._gemm(block, "w2", expanded, ffn, raw=ffn_raw,
                        residual=residual, scale="ffn_skip", partition=1024 if c == 1024 else 0)
-            if block == 0:
-                self._capture("block0-ffn-contract-half", ffn_raw, explicit_only=True)
-                self._capture("block0-ffn-contract-e4", ffn, explicit_only=True)
-        if detail:
-            self._capture(f"block{block}-ffn-contract-e4", ffn, explicit_only=True)
-        if block == 31:
-            self._capture("block31-ffn-contract-half", ffn_raw, explicit_only=True)
         qkv = self._at(level, "qkv", c * 3)
         attended = self._at(level, "attended", c)
         self._gemm(block, "qkv", ffn, qkv, quantize=False, partition=512 if c == 1024 else 0)
-        if block == 0:
-            self._capture("block0-qkv-half", qkv, explicit_only=True)
-        if block == 2:
-            self._capture("block2-qkv-half", qkv, explicit_only=True)
-        if detail:
-            self._capture(f"block{block}-qkv-half", qkv, explicit_only=True)
         if c == 1024:
             self._op(f"block{block}.attention", self.runtime.vit, qkv,
                      self._weight(block, "attention_scale"), attended, tokens=w * h, heads=c // 32)
@@ -179,21 +125,8 @@ class NativeGraph:
             self._op(f"block{block}.attention", self.runtime.window, qkv, self._weight(block, "prior"),
                      self._weight(block, "attention_scale"), attended, width=w, height=h,
                      heads=c // 32, phase=b["phase"])
-        if block == 0:
-            self._capture("block0-attended-e4", attended, explicit_only=True)
-        if block == 2:
-            self._capture("block2-attended-e4", attended, explicit_only=True)
-        if detail:
-            self._capture(f"block{block}-attended-e4", attended, explicit_only=True)
         self._gemm(block, "projection", attended, output, raw=raw_output,
                    residual=ffn_raw if c == 32 else ffn, scale="attn_skip", partition=256 if c == 1024 else 0)
-        if block == 0:
-            self._capture("block0-projection-half", raw_output, explicit_only=True)
-            self._capture("block0-projection-e4", output, explicit_only=True)
-        if detail:
-            self._capture(f"block{block}-projection-e4", output, explicit_only=True)
-        if block == 31:
-            self._capture("block31-projection-half", raw_output, explicit_only=True)
         return output
 
     def _build(self):
@@ -209,8 +142,6 @@ class NativeGraph:
                 residual_override = self._at(6, "input_raw", 32)
                 self._op("input adapter", self.runtime.f16gemm, self.features,
                          self._weight(0, "input_adapter"), residual_override, quantized=state)
-                self._capture("block0-input-adapter-half", residual_override, explicit_only=True)
-                self._capture("block0-input-adapter-e4", state, explicit_only=True)
             elif "before" in b:
                 before = b["before"]
                 iw, ih = self._size(before["input_level"])

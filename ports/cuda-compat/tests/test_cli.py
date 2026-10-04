@@ -70,6 +70,59 @@ class CLITests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual(json.loads((out / "report.json").read_text())["status"], "invalid")
 
+    def test_report_write_failure_returns_error_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary) / "report"
+            stderr, stdout = io.StringIO(), io.StringIO()
+            with patch("opendlss_cuda.fixture.run_parity", return_value={"status": "passed"}), \
+                    patch.object(cli, "write_report", side_effect=OSError("disk full")) as write, \
+                    contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                code = cli.main(["parity", "--model", "unused", "--library", "unused", "--fixture", "unused", "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertEqual(write.call_count, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            report = json.loads(stderr.getvalue())
+            self.assertEqual(report["status"], "runtime_error")
+            self.assertEqual(report["error"], "disk full")
+            self.assertFalse((out / "report.json").exists())
+
+    def test_existing_partial_is_preserved_without_success_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary) / "report"
+            partial = out / "report.json.partial"
+            def run(**kwargs):
+                partial.write_bytes(b"interrupted receipt")
+                return {"status": "passed"}
+            stderr = io.StringIO()
+            with patch("opendlss_cuda.fixture.run_parity", side_effect=run), \
+                    patch.object(cli, "write_report", wraps=cli.write_report) as write, \
+                    contextlib.redirect_stderr(stderr):
+                code = cli.main(["parity", "--model", "unused", "--library", "unused", "--fixture", "unused", "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertEqual(write.call_count, 1)
+            report = json.loads(stderr.getvalue())
+            self.assertEqual(report["status"], "runtime_error")
+            self.assertEqual(report["error_type"], "FileExistsError")
+            self.assertEqual(partial.read_bytes(), b"interrupted receipt")
+            self.assertFalse((out / "report.json").exists())
+
+    def test_operator_error_survives_error_report_write_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary) / "report"
+            stderr = io.StringIO()
+            with patch("opendlss_cuda.fixture.run_parity", side_effect=RuntimeError("operator failed")), \
+                    patch.object(cli, "write_report", side_effect=OSError("disk full")) as write, \
+                    contextlib.redirect_stderr(stderr):
+                code = cli.main(["parity", "--model", "unused", "--library", "unused", "--fixture", "unused", "--out", str(out)])
+            self.assertEqual(code, 2)
+            self.assertEqual(write.call_count, 1)
+            report = json.loads(stderr.getvalue())
+            self.assertEqual(report["status"], "runtime_error")
+            self.assertEqual(report["error_type"], "RuntimeError")
+            self.assertEqual(report["error"], "operator failed")
+            self.assertEqual(report["report_write_error"], {"error_type": "OSError", "error": "disk full"})
+            self.assertFalse((out / "report.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

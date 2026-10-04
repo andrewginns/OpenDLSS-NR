@@ -23,9 +23,8 @@ find_package(Threads REQUIRED)
 # reconfiguration; the generated identity header is excluded from its own hash.
 set(native_sources
   src/runtime.cu src/kernels/numerics/numerics.cuh src/browser_numerics.cuh
-  src/f16_compat.cuh src/attention_f13.cuh src/gemm_f13.cuh
-  src/gemm_f13_integer.cuh src/gemm_f13_variants.cuh src/window_f13_fused.cuh
-  src/window_fast.cuh src/gemm_blas.cuh src/gemm_browser.cuh
+  src/f16_compat.cuh src/attention_f13.cuh src/f13_dot.cuh src/gemm_f13.cuh
+  src/window_f13_fused.cuh src/window_common.cuh
   include/nr_cuda.h CMakeLists.txt toolchain/nr_build_info.h.in)
 set(source_inventory "")
 foreach(path IN LISTS native_sources)
@@ -48,7 +47,7 @@ configure_file(toolchain/nr_build_info.h.in generated/nr_build_info.h @ONLY)
 
 add_library(nr_cuda SHARED src/runtime.cu)
 target_include_directories(nr_cuda PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(nr_cuda PRIVATE CUDA::cudart CUDA::cublas Threads::Threads)
+target_link_libraries(nr_cuda PRIVATE CUDA::cudart Threads::Threads)
 target_compile_options(nr_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo;--ftz=false>)
 set_target_properties(nr_cuda PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
 install(TARGETS nr_cuda LIBRARY DESTINATION lib)
@@ -66,7 +65,7 @@ if(BUILD_TESTING)
   numeric_target(nr-f13-test src/f13_test.cu)
   numeric_target(nr-f24-test src/f16_compat_test.cu)
   numeric_target(nr-browser-numerics-test src/browser_numerics_test.cu)
-  numeric_target(nr-compact-gemm-test src/gemm_f13_variants_test.cu)
+  numeric_target(nr-compact-gemm-test src/gemm_f13_test.cu)
   numeric_target(nr-window-test src/window_f13_fused_test.cu)
   target_link_libraries(nr-window-test PRIVATE ${CMAKE_DL_LIBS})
   add_executable(nr-api-test src/api_test.cpp)
@@ -82,8 +81,8 @@ if(BUILD_TESTING)
     add_test(NAME ${mode}-f13 COMMAND nr-f13-test ${host_arg} --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/numerics.bin")
     add_test(NAME ${mode}-f24 COMMAND nr-f24-test ${host_arg} --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/numerics.bin")
     add_test(NAME ${mode}-browser-numerics COMMAND nr-browser-numerics-test ${host_arg} --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/browser-silu-observed.bin")
-    add_test(NAME ${mode}-compact-gemm COMMAND nr-compact-gemm-test ${host_arg} --variant 4 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/f13")
-    add_test(NAME ${mode}-window COMMAND nr-window-test ${host_arg} --compact-32-only --reference-library $<TARGET_FILE:nr_cuda>)
+    add_test(NAME ${mode}-compact-gemm COMMAND nr-compact-gemm-test ${host_arg} --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/f13")
+    add_test(NAME ${mode}-window COMMAND nr-window-test ${host_arg} --reference-library $<TARGET_FILE:nr_cuda>)
     set_tests_properties(${mode}-api ${mode}-numerics ${mode}-f13 ${mode}-f24 ${mode}-browser-numerics ${mode}-compact-gemm ${mode}-window PROPERTIES LABELS "${mode}" TIMEOUT 180)
   endforeach()
 endif()

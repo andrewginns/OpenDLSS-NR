@@ -321,10 +321,11 @@ def _load_verified_model(directory: Path) -> tuple[dict, dict, dict]:
         if path.stat().st_size != stage["packedByteLength"]:
             raise ValueError(f"stage size mismatch: {sid}")
         data = path.read_bytes()
-        if not re.fullmatch("[0-9a-f]{64}", stage["sha256"]) or len(data) != stage["packedByteLength"] or sha256(data) != stage["sha256"]:
+        digest = sha256(data)
+        if len(data) != stage["packedByteLength"] or digest != stage["sha256"]:
             raise ValueError(f"stage size/SHA256 mismatch: {sid}")
         stages[sid] = data
-        provenance["stages"].append({"id": sid, "file": stage["file"], "nbytes": len(data), "sha256": sha256(data)})
+        provenance["stages"].append({"id": sid, "file": stage["file"], "nbytes": len(data), "sha256": digest})
     for tensor in manifest["tensors"]:
         name = tensor["name"]
         if name in tensor_data:
@@ -377,54 +378,51 @@ def export_model(directory: Path, output: Path) -> dict:
     output.mkdir(parents=True, exist_ok=False)
     arrays, replaced = [], 0
     pending = output / "weights.bin.partial"
-    try:
-        with pending.open("xb") as blob:
-            for spec in array_specs():
-                raw, shape, kind = tensors[spec["tensor"]], spec["shape"], spec["kind"]
-                offset = spec["byte_offset"]
-                nan_count = 0
-                if kind == "fp8":
-                    data, nan_count = decode_fp8(raw, offset, shape[-2], shape[-1], shape[0] if len(shape) == 3 else 1)
-                elif kind == "f16_packed":
-                    data = decode_f16(raw, offset, *shape)
-                elif kind == "prior":
-                    data = decode_prior(raw, offset, shape[0])
-                else:
-                    data = np.frombuffer(checked_slice(raw, offset, source_nbytes(spec)), dtype="<f4" if kind == "float32" else "<f2").reshape(shape)
-                if not np.isfinite(data).all():
-                    raise ValueError(f"Nonfinite model array: {spec['name']}")
-                payload = data.tobytes(order="C")
-                padding = (-blob.tell()) % 256
-                blob.write(b"\0" * padding)
-                descriptor = {"name": spec["name"], "dtype": "float32" if kind == "float32" else "float16",
-                              "shape": shape, "offset": blob.tell(), "nbytes": len(payload), "sha256": sha256(payload),
-                              "source": {"tensor": spec["tensor"], "byte_offset": offset, "kind": kind,
-                                         "nbytes": source_nbytes(spec)}}
-                if kind == "fp8":
-                    descriptor["source"].update(k_permutation="inverse_packed_input_index", nan_codes_replaced=nan_count)
-                if kind == "prior":
-                    descriptor["axes"] = ["head", "natural_query", "physical_key"]
-                blob.write(payload)
-                arrays.append(descriptor)
-                replaced += nan_count
-        blob_digest = hashlib.sha256()
-        with pending.open("rb") as blob:
-            for chunk in iter(lambda: blob.read(8 << 20), b""):
-                blob_digest.update(chunk)
-        graph = block_schedule()
-        for block in graph:
-            block["parameters"] = [a["name"] for a in arrays if a["name"].startswith(block["parameter_prefix"])]
-        result = {"format": FORMAT, "endianness": "little", "layout": "row_major",
-                  "block_count": 71, "source_records": 153, "consumed_records": 145,
-                  "blob": {"file": "weights.bin", "nbytes": pending.stat().st_size, "sha256": blob_digest.hexdigest()},
-                  "nan_weight_codes_replaced": replaced, "arrays": arrays, "blocks": graph, "source": provenance}
-        (output / "manifest.json.partial").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
-        pending.replace(output / "weights.bin")
-        (output / "manifest.json.partial").replace(output / "manifest.json")
-        return result
-    except Exception:
-        # Partial files are deliberately retained for inspection; no manifest is published.
-        raise
+    # Retain partial files for inspection; publish the manifest only after success.
+    with pending.open("xb") as blob:
+        for spec in array_specs():
+            raw, shape, kind = tensors[spec["tensor"]], spec["shape"], spec["kind"]
+            offset = spec["byte_offset"]
+            nan_count = 0
+            if kind == "fp8":
+                data, nan_count = decode_fp8(raw, offset, shape[-2], shape[-1], shape[0] if len(shape) == 3 else 1)
+            elif kind == "f16_packed":
+                data = decode_f16(raw, offset, *shape)
+            elif kind == "prior":
+                data = decode_prior(raw, offset, shape[0])
+            else:
+                data = np.frombuffer(checked_slice(raw, offset, source_nbytes(spec)), dtype="<f4" if kind == "float32" else "<f2").reshape(shape)
+            if not np.isfinite(data).all():
+                raise ValueError(f"Nonfinite model array: {spec['name']}")
+            payload = data.tobytes(order="C")
+            padding = (-blob.tell()) % 256
+            blob.write(b"\0" * padding)
+            descriptor = {"name": spec["name"], "dtype": "float32" if kind == "float32" else "float16",
+                          "shape": shape, "offset": blob.tell(), "nbytes": len(payload), "sha256": sha256(payload),
+                          "source": {"tensor": spec["tensor"], "byte_offset": offset, "kind": kind,
+                                     "nbytes": source_nbytes(spec)}}
+            if kind == "fp8":
+                descriptor["source"].update(k_permutation="inverse_packed_input_index", nan_codes_replaced=nan_count)
+            if kind == "prior":
+                descriptor["axes"] = ["head", "natural_query", "physical_key"]
+            blob.write(payload)
+            arrays.append(descriptor)
+            replaced += nan_count
+    blob_digest = hashlib.sha256()
+    with pending.open("rb") as blob:
+        for chunk in iter(lambda: blob.read(8 << 20), b""):
+            blob_digest.update(chunk)
+    graph = block_schedule()
+    for block in graph:
+        block["parameters"] = [a["name"] for a in arrays if a["name"].startswith(block["parameter_prefix"])]
+    result = {"format": FORMAT, "endianness": "little", "layout": "row_major",
+              "block_count": 71, "source_records": 153, "consumed_records": 145,
+              "blob": {"file": "weights.bin", "nbytes": pending.stat().st_size, "sha256": blob_digest.hexdigest()},
+              "nan_weight_codes_replaced": replaced, "arrays": arrays, "blocks": graph, "source": provenance}
+    (output / "manifest.json.partial").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    pending.replace(output / "weights.bin")
+    (output / "manifest.json.partial").replace(output / "manifest.json")
+    return result
 
 
 def main():

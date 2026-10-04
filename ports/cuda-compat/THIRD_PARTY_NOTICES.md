@@ -6,7 +6,7 @@ arithmetic fixtures derive from OpenDLSS-NR at
 [MIT license](../../LICENSE). The CUDA compatibility implementation follows that
 graph and separately identified observed browser arithmetic.
 
-CUDA Toolkit, CUDA runtime and cuBLAS retain their NVIDIA license terms. They
+CUDA Toolkit and CUDA runtime retain their NVIDIA license terms. They
 are external build/runtime dependencies and are not redistributed in this source
 contribution. Model weights and private capture data are user-supplied and are
 not included. Conversion records the supplied model's identities; it does not

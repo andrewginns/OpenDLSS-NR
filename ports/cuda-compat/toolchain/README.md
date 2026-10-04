@@ -21,8 +21,8 @@ configuration receipt. `nr_source_sha256()` identifies the listed sources;
 These are distinct from the built library's SHA256. No byte-identical build claim
 is made across toolchains or hosts.
 
-On the supported GPU host, after supplying CUDA runtime and cuBLAS shared
-libraries through the system loader or an explicit private `LD_LIBRARY_PATH`:
+On the supported GPU host, make the CUDA runtime shared library available
+through the system loader or `LD_LIBRARY_PATH`, then run:
 
 ```sh
 ctest --test-dir build -L gpu --output-on-failure
@@ -37,7 +37,6 @@ runs GPU tests. The source distribution does not bundle NVIDIA runtime libraries
 
 The Ubuntu 24.04 host ABI does not establish support for older glibc systems.
 The C interface is internal to its matching Python package at ABI version 1.
-Only numerical policy ID 6 (`browser-compat-v1`) is accepted. Internal alternative
-helpers and cuBLAS remain compiled as part of the mechanical extraction; they
-are not public policy choices. Window selection is an explicit create argument,
-so `NR_WINDOW_IMPL` cannot alter the chosen implementation.
+The numerical policy is `browser-compat-v1` (ID 6). Window selection is an
+explicit create argument: fused windows are the default; staged windows support
+operator comparison.

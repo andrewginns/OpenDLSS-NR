@@ -156,15 +156,16 @@ class GraphTests(unittest.TestCase):
             graph.record()  # buffer reuse must preserve valid shapes and ordering
             self.assertEqual(rt.allocations, initial_allocations)
 
-    def test_boundary_selection_and_full_capture(self):
-        for captures, expected in [(["block-0", "block-39", "transition-4-5"], 3), (True, 75)]:
+    def test_optional_full_boundary_capture(self):
+        for captures, expected in ((False, 0), (True, 75)):
             graph = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, capture_boundaries=captures)
             graph.features.initialized = True
             graph.record()
             self.assertEqual(len(graph.boundaries), expected)
             self.assertTrue(all(t.initialized for t in graph.boundaries.values()))
-        with self.assertRaises(ValueError):
-            NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, capture_boundaries=["block-999"])
+        for capture in (None, 1, [], "all"):
+            with self.subTest(capture=capture), self.assertRaisesRegex(ValueError, "must be a bool"):
+                NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, capture_boundaries=capture)
 
     def test_raw_residual_paths(self):
         graph = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320)
@@ -175,100 +176,6 @@ class GraphTests(unittest.TestCase):
         self.assertIs(prologues["block0.w2"], graph.buffers["level6.input_raw"])
         self.assertIs(prologues["block66.w2"], graph.buffers["level0.input_raw"])
         self.assertIs(prologues["block70.w2"], graph.buffers["level6.input_raw"])
-
-    def test_block0_detail_capture_order_and_sources(self):
-        expected = [
-            ("input adapter", "block0-input-adapter-half", "level6.input_raw", 32),
-            ("input adapter", "block0-input-adapter-e4", "level6.state_a", 32),
-            ("block0.w1.preactivation-diagnostic", "block0-ffn-expand-pre-half",
-             "level6.expanded_preactivation_diagnostic", 128),
-            ("block0.w1", "block0-ffn-expand-e4", "level6.expanded", 128),
-            ("block0.w2", "block0-ffn-contract-half", "level6.ffn_raw", 32),
-            ("block0.w2", "block0-ffn-contract-e4", "level6.ffn", 32),
-            ("block0.qkv", "block0-qkv-half", "level6.qkv", 96),
-            ("block0.attention", "block0-attended-e4", "level6.attended", 32),
-            ("block0.projection", "block0-projection-half", "level6.output_raw", 32),
-            ("block0.projection", "block0-projection-e4", "level6.state_b", 32),
-        ]
-        names = [item[1] for item in expected]
-        graph = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, capture_boundaries=names)
-        self.assertEqual(list(graph.boundaries), names)
-        graph.features.initialized = True
-        graph.record()
-        self.assertTrue(all(t.initialized for t in graph.boundaries.values()))
-        producers = {}
-        producer = None
-        for name, (_, args, _) in zip(graph.operation_names, graph.ops):
-            if name.startswith("capture "):
-                producers[name[8:]] = (producer, args)
-            else:
-                producer = name
-        for operation, boundary, source, channels in expected:
-            producer, (captured_source, destination) = producers[boundary]
-            self.assertEqual(producer, operation)
-            self.assertIs(captured_source, graph.buffers[source])
-            self.assertIs(destination, graph.boundaries[boundary])
-            self.assertIsNot(destination, captured_source)
-            self.assertEqual(destination.shape, (graph.geometry["full_rows"], channels))
-        # False and True retain their original allocation and capture behavior;
-        # detailed buffers are allocated only for a named diagnostic request.
-        for capture in (False, True):
-            plain = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, capture_boundaries=capture)
-            self.assertFalse(set(names).intersection(plain.boundaries))
-            self.assertNotIn("level6.expanded_preactivation_diagnostic", plain.buffers)
-            self.assertNotIn("block0.w1.preactivation-diagnostic", plain.operation_names)
-        diagnostic_index = graph.operation_names.index("block0.w1.preactivation-diagnostic")
-        original_index = graph.operation_names.index("block0.w1")
-        _, diagnostic_args, diagnostic_kwargs = graph.ops[diagnostic_index]
-        _, original_args, original_kwargs = graph.ops[original_index]
-        self.assertEqual(diagnostic_args, original_args)
-        self.assertFalse(diagnostic_kwargs["silu"])
-        self.assertFalse(diagnostic_kwargs["quantize"])
-        self.assertTrue(original_kwargs["silu"])
-        self.assertTrue(original_kwargs["quantize"])
-        self.assertLess(diagnostic_index, original_index)
-        one = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320,
-                          capture_boundaries=["block0-qkv-half"])
-        self.assertEqual(list(one.boundaries), ["block0-qkv-half"])
-
-    def test_grouped_split_and_partitioned_detail_captures(self):
-        expected = {}
-        for block, rows, channels, expanded in ((5, 6400, 64, 256), (23, 144, 512, 2048), (31, 64, 1024, 4096)):
-            stages = {"input-state-e4": channels, "ffn-expand-e4": expanded,
-                      "ffn-contract-e4": channels, "qkv-half": 3 * channels,
-                      "attended-e4": channels, "projection-e4": channels}
-            if block in (5, 23):
-                stages["ffn-narrow-e4"] = channels
-            if block == 23:
-                stages["ffn-branch-e4"] = channels
-            if block == 31:
-                stages.update({"ffn-expand-pre-half": expanded, "ffn-contract-half": channels,
-                               "projection-half": channels})
-            expected.update({f"block{block}-{name}": (rows, width) for name, width in stages.items()})
-        graph = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320,
-                            mode="legacy_belvedere", capture_boundaries=list(expected))
-        graph.features.initialized = True
-        graph.record()
-        self.assertEqual(set(graph.boundaries), set(expected))
-        for name, shape in expected.items():
-            self.assertEqual(graph.boundaries[name].shape, shape, name)
-            self.assertTrue(graph.boundaries[name].initialized)
-        operations = dict(zip(graph.operation_names, graph.ops))
-        for name, partition in (("block31.w2", 1024), ("block31.qkv", 512), ("block31.projection", 256)):
-            self.assertEqual(operations[name][2]["partition"], partition)
-        self.assertIsNotNone(operations["block31.w2"][2]["raw"])
-        self.assertIsNotNone(operations["block31.projection"][2]["raw"])
-        self.assertFalse(operations["block31.w1.preactivation-diagnostic"][2]["silu"])
-        self.assertFalse(operations["block31.w1.preactivation-diagnostic"][2]["quantize"])
-        baseline = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320, mode="legacy_belvedere")
-        all_blocks = NativeGraph(CheckingRuntime(), FakeModel(), 320, 320,
-                                 mode="legacy_belvedere", capture_boundaries=True)
-        self.assertEqual(len(all_blocks.boundaries), 75)
-        self.assertEqual([n for n in graph.operation_names if not n.startswith("capture ") and "preactivation-diagnostic" not in n],
-                         baseline.operation_names)
-        for plain in (baseline, all_blocks):
-            self.assertFalse(set(expected).intersection(plain.boundaries))
-            self.assertFalse(any("diagnostic" in name for name in plain.buffers))
 
 
 if __name__ == "__main__":

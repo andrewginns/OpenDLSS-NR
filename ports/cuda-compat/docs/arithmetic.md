@@ -17,14 +17,12 @@ identified captures that pass the strict parity checks.
 | Global attention | Use the canonical manual-RNE/F13 path. |
 | FP16 adapter and head | Software F24 K8 product alignment and publication. |
 
-FP16 weight storage does not make this a pure FP16 Tensor Core backend. The
-accepted reductions intentionally reproduce software compatibility arithmetic.
-Native E4M3 conversion or FP8 MMA instructions are not needed on the supported
-SM75 path. Internal helper code for other arithmetic may remain in the compiled
-translation unit; the public API exposes only policy 6 under the name
-`browser-compat-v1`. There is no approximate fallback.
+Inference combines FP16 weight storage with software E4M3 publication and
+F13/F24 reductions. These reproduce the reference arithmetic on SM75 without
+native FP8 conversion or matrix instructions. The API identifies this contract
+as `browser-compat-v1` (policy 6).
 
-The historical browser capture enabled `vulkan_enable_f16_on_nvidia`. Some
+The reference browser capture enabled `vulkan_enable_f16_on_nvidia`. Some
 intermediate half casts in generated source did not describe the observed
 executed behavior. The reference identity therefore includes browser, driver,
 source, model, geometry and input hashes. A changed browser or driver requires

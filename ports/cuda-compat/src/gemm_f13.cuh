@@ -1,162 +1,178 @@
-// Diagnostic CUDA-core emulation of the pinned OpenDLSS-NR F13 dot schedule.
-// Source semantics: tools/reference/port/{src/numerics.js,shaders/numerics.wgsl}
-// OpenDLSS-NR is MIT, Copyright (c) 2026 maan. This kernel does not use Tensor Cores.
+// Browser-compatible F13 GEMM with compact decoded-E4 operands.
 #pragma once
 #include <cuda_runtime.h>
 #include <climits>
 #include <cstddef>
+#include <initializer_list>
 #include <stdexcept>
-#include <type_traits>
-#include "kernels/numerics/numerics.cuh"
 #include "browser_numerics.cuh"
 
+#define NR_F13_GEMM_HD __host__ __device__ __forceinline__
 namespace nr {
-namespace f13_detail {
-using Half = __half;
-
-__device__ __forceinline__ int exponent(Half value, int floor) {
-    const int e = int((halfBits(value) >> 10) & 31) - 15;
+namespace f13_gemm_detail {
+using H = __half;
+NR_F13_GEMM_HD int exponent(float x, int floor) {
+    const int e = int((browser_detail::floatBits(x) >> 23) & 255u) - 127;
     return e < floor ? floor : e;
 }
+NR_F13_GEMM_HD bool nonfinite(float x) {
+    return (browser_detail::floatBits(x) & 0x7f800000u) == 0x7f800000u;
+}
+NR_F13_GEMM_HD int start_exponent(float x) {
+    return (browser_detail::floatBits(x) & 0x7fffffffu) ? exponent(x, -14) : -21;
+}
+NR_F13_GEMM_HD float power(int e) {
+#if defined(__CUDA_ARCH__)
+    return __int_as_float((e + 127) << 23);
+#else
+    return std::ldexp(1.f, e);
+#endif
+}
+NR_F13_GEMM_HD float multiply(float a, float b) {
+#if defined(__CUDA_ARCH__)
+    return __fmul_rn(a, b);
+#else
+    return a * b;
+#endif
+}
+NR_F13_GEMM_HD int truncate(float x) {
+#if defined(__CUDA_ARCH__)
+    return __float2int_rz(x);
+#else
+    return int(std::trunc(x));
+#endif
+}
 
-// Inputs must be finite E4M3 values decoded exactly to half. A half accumulator
-// is aligned with sixteen products, each term is truncated toward zero, and
-// the integer total is rounded once to half. Every aligned term fits 15 bits;
-// all seventeen terms fit 20 bits, so int32 addition is exact and order-free.
-__device__ __forceinline__ Half step16(const Half* a, int a_stride,
-                                      const Half* b, int b_stride, Half incoming) {
-    const unsigned incoming_bits = halfBits(incoming);
-    if ((incoming_bits & 0x7c00u) == 0x7c00u) return incoming;
-    int maximum = (incoming_bits & 0x7fffu) ? exponent(incoming, -14) : -21;
+// Decoded E4 FP32 values leave low mantissa bits available for exponents.
+NR_F13_GEMM_HD uint32_t pack_compact(H value) {
+    const int e = int((halfBits(value) >> 10) & 31) - 15;
+    return browser_detail::floatBits(halfToFloat(value)) | uint32_t((e < -6 ? -6 : e) + 6);
+}
+NR_F13_GEMM_HD float compact_value(uint32_t record) {
+    const uint32_t bits = record & ~15u;
+#if defined(__CUDA_ARCH__)
+    return __uint_as_float(bits);
+#else
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+#endif
+}
+NR_F13_GEMM_HD float step_compact(const uint32_t *a, int as, const uint32_t *b, int bs,
+                                  float incoming) {
+    if (nonfinite(incoming))
+        return incoming;
+    int maximum = start_exponent(incoming);
     float products[16];
 #pragma unroll
     for (int i = 0; i < 16; ++i) {
-        const Half left = a[i * a_stride], right = b[i * b_stride];
-        products[i] = __fmul_rn(halfToFloat(left), halfToFloat(right));
-        if ((halfBits(left) & 0x7fffu) && (halfBits(right) & 0x7fffu)) {
-            const int product_exponent = exponent(left, -6) + exponent(right, -6);
-            if (product_exponent > maximum) maximum = product_exponent;
-        }
+        const uint32_t left = a[i * as], right = b[i * bs];
+        products[i] = multiply(compact_value(left), compact_value(right));
+        const int e = int(left & 15u) + int(right & 15u) - 12;
+        if (products[i] != 0.f && e > maximum)
+            maximum = e;
     }
-    const float alignment = __int_as_float((140 - maximum) << 23);
-    int units = __float2int_rz(__fmul_rn(halfToFloat(incoming), alignment));
+    const float alignment = power(13 - maximum);
+    int units = truncate(multiply(incoming, alignment));
 #pragma unroll
     for (int i = 0; i < 16; ++i)
-        units += __float2int_rz(__fmul_rn(products[i], alignment));
-    const float unit = __int_as_float((maximum + 114) << 23);
-    return halfRne(__fmul_rn(float(units), unit));
+        units += truncate(multiply(products[i], alignment));
+    return multiply(float(units), power(maximum - 13));
 }
 
-// Separate browser diagnostic: the observed block-0 K32 GEMM retains the
-// aligned FP32 result between K16 groups. Its incoming exponent therefore
-// comes from FP32, clamped at -14, rather than from a half conversion.
-__device__ __forceinline__ float step16_browser(const Half* a,int as,const Half* b,int bs,float incoming) {
-    const unsigned bits=__float_as_uint(incoming);
-    if((bits&0x7f800000u)==0x7f800000u)return incoming;
-    int e=int((bits>>23)&255)-127;
-    int maximum=(bits&0x7fffffffu)?(e < -14 ? -14 : e):-21;
-    float products[16];
-#pragma unroll
-    for(int i=0;i<16;++i){
-        const Half left=a[i*as],right=b[i*bs];
-        products[i]=__fmul_rn(halfToFloat(left),halfToFloat(right));
-        if((halfBits(left)&0x7fffu)&&(halfBits(right)&0x7fffu)){
-            const int pe=exponent(left,-6)+exponent(right,-6);
-            if(pe>maximum)maximum=pe;
-        }
-    }
-    const float alignment=__int_as_float((140-maximum)<<23);
-    int units=__float2int_rz(__fmul_rn(incoming,alignment));
-#pragma unroll
-    for(int i=0;i<16;++i)units+=__float2int_rz(__fmul_rn(products[i],alignment));
-    return __fmul_rn(float(units),__int_as_float((maximum+114)<<23));
-}
-
-// One CUDA thread owns one output. A/B K16 tiles are shared across 256 outputs;
-// only scalar CUDA-core arithmetic performs exponent selection and truncation.
-template<bool Browser=false>
-static __global__ void gemm_kernel(const Half* a, const Half* weights,
-                                   Half* output, Half* raw, const Half* residual,
-                                   const Half* scale, int M, int K, int N,
-                                   int batches, bool broadcast, bool activation,
-                                   int partition, bool quantize) {
-    const int tx = threadIdx.x, ty = threadIdx.y;
-    const int row = int(blockIdx.y) * 16 + ty;
-    const int column = int(blockIdx.x) * 16 + tx;
-    const int expert = blockIdx.z;
-    const size_t input_stride = size_t(K) * (broadcast ? 1 : batches);
-    const size_t output_stride = size_t(N) * batches;
-    const size_t output_index = size_t(row) * output_stride + size_t(expert) * N + column;
+static __global__ void gemm(const H *a, const H *weights, H *output, H *raw, const H *residual,
+                            const H *scale, float *diagnostic_wide, int M, int K, int N,
+                            int experts, bool broadcast, bool silu, int partition, bool quantize) {
+    const int tx = threadIdx.x, ty = threadIdx.y, row = int(blockIdx.y) * 16 + ty,
+              column = int(blockIdx.x) * 16 + tx, expert = blockIdx.z;
+    const size_t as = size_t(K) * (broadcast ? 1 : experts), os = size_t(N) * experts;
+    const size_t at = size_t(row) * os + size_t(expert) * N + column;
     const bool valid = row < M && column < N;
-    using Accumulator=std::conditional_t<Browser,float,Half>;
-    Accumulator accumulator;
-    if constexpr(Browser){
-        accumulator=valid&&residual?__fmul_rn(halfToFloat(residual[output_index]),halfToFloat(scale[expert*N+column])):0.f;
-    }else accumulator=valid&&residual?mulHalf(residual[output_index],scale[expert*N+column]):halfRne(0.f);
-    Accumulator partition_sum;
-    if constexpr(Browser)partition_sum=0.f;else partition_sum=halfRne(0.f);
-    __shared__ __align__(32) Half left[16][16];
-    __shared__ __align__(32) Half right[16][16];
+    float accumulator = valid && residual ? __fmul_rn(halfToFloat(residual[at]),
+                                                      halfToFloat(scale[expert * N + column]))
+                                          : 0.f,
+          total = 0.f;
+    __shared__ uint32_t av[16][16], bv[16][16];
     for (int start = 0; start < K; start += 16) {
-        left[ty][tx] = row < M ? a[size_t(row) * input_stride + (broadcast ? 0 : size_t(expert) * K) + start + tx] : halfRne(0.f);
-        right[ty][tx] = column < N ? weights[(size_t(expert) * K + start + ty) * N + column] : halfRne(0.f);
+        const H left = row < M
+                           ? a[size_t(row) * as + (broadcast ? 0 : size_t(expert) * K) + start + tx]
+                           : halfRne(0.f);
+        const H right =
+            column < N ? weights[(size_t(expert) * K + start + ty) * N + column] : halfRne(0.f);
+        av[ty][tx] = pack_compact(left);
+        bv[ty][tx] = pack_compact(right);
         __syncthreads();
         if (valid) {
-            if constexpr(Browser)accumulator=step16_browser(&left[ty][0],1,&right[0][tx],16,accumulator);
-            else accumulator=step16(&left[ty][0],1,&right[0][tx],16,accumulator);
+            accumulator = step_compact(&av[ty][0], 1, &bv[0][tx], 16, accumulator);
             if (partition && ((start + 16) % partition == 0 || start + 16 == K)) {
-                // Observed browser partitions retain each FP32 partial and
-                // left-fold the totals in FP32. The residual seed belongs
-                // only to the first partition; subsequent groups start at 0.
-                if constexpr(Browser)partition_sum=start<partition?accumulator:__fadd_rn(partition_sum,accumulator);
-                else partition_sum=start<partition?accumulator:addHalf(partition_sum,accumulator);
-                if constexpr(Browser)accumulator=0.f;else accumulator=halfRne(0.f);
+                total = start < partition ? accumulator : __fadd_rn(total, accumulator);
+                accumulator = 0.f;
             }
         }
         __syncthreads();
     }
     if (valid) {
-        Half value;
-        float unrounded=0.f;
-        if constexpr(Browser){
-            unrounded=partition?partition_sum:accumulator;
-            value=browserHalfRtz(unrounded);
-        }else value=partition?partition_sum:accumulator;
-        if constexpr(Browser){
-            // Observed raw-half and E4 publications are independent. SiLU's
-            // table index is the RTZ half, but its E4 table entry comes from
-            // the unrounded FP32 polynomial, not from its stored half column.
-            const Half raw_value=activation?browserSiluHalf(value):value;
-            if(raw)raw[output_index]=raw_value;
-            output[output_index]=quantize?(activation?browserSiluE4(value):browserPublishE4(unrounded)):raw_value;
-        }else{
-            if(activation)value=siluHalf(value);
-            if(raw)raw[output_index]=value;
-            output[output_index]=quantize?publishE4(value):value;
-        }
+        const float value = partition ? total : accumulator;
+        if (diagnostic_wide)
+            diagnostic_wide[at] = value;
+        const H index = browserHalfRtz(value), published = silu ? browserSiluHalf(index) : index;
+        if (raw)
+            raw[at] = published;
+        output[at] = quantize ? (silu ? browserSiluE4(index) : browserPublishE4(value)) : published;
     }
 }
-} // namespace f13_detail
+inline bool ranges_overlap(const void *first, size_t first_bytes, const void *second,
+                           size_t second_bytes) {
+    if (!first || !second)
+        return false;
+    const uintptr_t a = reinterpret_cast<uintptr_t>(first), b = reinterpret_cast<uintptr_t>(second);
+    return a <= b ? b - a < first_bytes : a - b < second_bytes;
+}
 
-// Same row-interleaved expert layout as nr_gemm_blas. M/N tails are supported;
-// K and nonzero partition widths must be multiples of sixteen. Half residual
-// scaling happens before the first F13 group. No allocations or synchronization.
-inline void nr_gemm_f13(const __half* a, const __half* weights, __half* output,
-                        __half* raw, const __half* residual, const __half* scale,
-                        int M, int K, int N, int batches, int broadcast, int silu,
-                        int partition, int quantize, cudaStream_t stream,bool browser=false) {
-    if (!a || !weights || !output || M <= 0 || K <= 0 || N <= 0 || K % 16 ||
-        batches < 1 || batches > 65535 || M > 65535 * 16 || partition < 0 || partition % 16 ||
-        (residual && !scale) || (broadcast != 0 && broadcast != 1) ||
-        size_t(M) * N * batches > INT_MAX)
-        throw std::invalid_argument("Invalid diagnostic F13 GEMM shape or pointers");
-    if(browser)
-        f13_detail::gemm_kernel<true><<<dim3((N+15)/16,(M+15)/16,batches),dim3(16,16),0,stream>>>(
-            a,weights,output,raw,residual,scale,M,K,N,batches,broadcast!=0,silu!=0,partition,quantize!=0);
-    else
-        f13_detail::gemm_kernel<false><<<dim3((N+15)/16,(M+15)/16,batches),dim3(16,16),0,stream>>>(
-            a,weights,output,raw,residual,scale,M,K,N,batches,broadcast!=0,silu!=0,partition,quantize!=0);
-    const cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
+} // namespace f13_gemm_detail
+
+inline void nr_gemm_f13(const __half *a, const __half *weights, __half *output, __half *raw,
+                        const __half *residual, const __half *scale, int M, int K, int N,
+                        int experts, int broadcast, int silu, int partition, int quantize,
+                        cudaStream_t stream, float *diagnostic_wide = nullptr) {
+    if (!a || !weights || !output || M <= 0 || K <= 0 || N <= 0 || K % 16 || experts < 1 ||
+        experts > 65535 || M > 65535 * 16 || N > INT_MAX - 15 || partition < 0 || partition % 16 ||
+        (residual && !scale) || (broadcast != 0 && broadcast != 1) || (silu != 0 && silu != 1) ||
+        (quantize != 0 && quantize != 1))
+        throw std::invalid_argument("Invalid F13 GEMM shape or pointers");
+    const size_t os = size_t(N) * experts;
+    if (os > INT_MAX || size_t(M) > size_t(INT_MAX) / os || size_t(K) > size_t(INT_MAX) / os ||
+        size_t(K) * (broadcast ? 1 : experts) > INT_MAX)
+        throw std::invalid_argument("F13 GEMM tensor exceeds bounded count");
+    const size_t input_bytes = size_t(M) * K * (broadcast ? 1 : experts) * sizeof(__half),
+                 weights_bytes = size_t(K) * os * sizeof(__half);
+    const size_t output_bytes = size_t(M) * os * sizeof(__half), scale_bytes = os * sizeof(__half);
+    for (const void *target : {static_cast<const void *>(output), static_cast<const void *>(raw)})
+        if (f13_gemm_detail::ranges_overlap(target, output_bytes, a, input_bytes) ||
+            f13_gemm_detail::ranges_overlap(target, output_bytes, weights, weights_bytes) ||
+            f13_gemm_detail::ranges_overlap(target, output_bytes, scale, scale_bytes) ||
+            (target != residual &&
+             f13_gemm_detail::ranges_overlap(target, output_bytes, residual, output_bytes)))
+            throw std::invalid_argument("F13 GEMM output overlaps an input");
+    if (f13_gemm_detail::ranges_overlap(output, output_bytes, raw, output_bytes))
+        throw std::invalid_argument("F13 GEMM output overlaps raw");
+    if (diagnostic_wide) {
+        const size_t wide_bytes = size_t(M) * os * sizeof(float);
+        if (f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, a, input_bytes) ||
+            f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, weights, weights_bytes) ||
+            f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, residual, output_bytes) ||
+            f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, scale, scale_bytes) ||
+            f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, output, output_bytes) ||
+            f13_gemm_detail::ranges_overlap(diagnostic_wide, wide_bytes, raw, output_bytes))
+            throw std::invalid_argument("F13 GEMM wide output overlaps a tensor");
+    }
+    const dim3 grid((N + 15) / 16, (M + 15) / 16, experts), block(16, 16);
+    f13_gemm_detail::gemm<<<grid, block, 0, stream>>>(a, weights, output, raw, residual, scale,
+                                                      diagnostic_wide, M, K, N, experts, broadcast,
+                                                      silu, partition, quantize);
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess)
+        throw std::runtime_error(cudaGetErrorString(status));
 }
 } // namespace nr
+#undef NR_F13_GEMM_HD

@@ -1,7 +1,7 @@
 """Geometry and block schedule transcribed from upstream src/nr_graph.cpp.
 
-Legacy geometry uses the existing wrapper's multiple-of-64 padded extent or an
-explicit validated override. It never substitutes this for the upstream rule.
+Legacy geometry uses a multiple-of-64 padded extent or an explicit validated
+override. It never substitutes this for the upstream rule.
 """
 from __future__ import annotations
 
@@ -37,8 +37,7 @@ def geometry_from_valid(width: int, height: int, mode: str = "upstream", *,
         if fw % (4 * aw) == 0 and fh % (4 * ah) == 0:
             fw += aw
     elif mode == "legacy_belvedere":
-        # Existing belvedere.features.NetworkGeometry.vendor_aligned; explicit
-        # overrides still obey the bridge-geometry.js validation contract.
+        # Legacy callers align each padded dimension to a multiple of 64.
         fw = align_up(max(320, width), 64) if full_width is None else full_width
         fh = align_up(max(320, height), 64) if full_height is None else full_height
         for name, value, valid in (("full_width", fw, width), ("full_height", fh, height)):

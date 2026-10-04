@@ -208,17 +208,23 @@ def main(argv=None):
             else:
                 report.update(_run(args))
         report["completed_utc"] = datetime.now(timezone.utc).isoformat()
-        if directory is not None:
-            write_report(directory, report)
-        print(json.dumps(report, indent=2, allow_nan=False))
-        return {"completed": 0, "passed": 0, "mismatch": 1, "unavailable": 3}[report["status"]]
+        exit_code = {"completed": 0, "passed": 0, "mismatch": 1, "unavailable": 3}[report["status"]]
     except (ValueError, OSError, RuntimeError, KeyError) as error:
         status = "invalid" if isinstance(error, (ValueError, KeyError, FileNotFoundError, FileExistsError)) else "runtime_error"
         report.update(status=status, error_type=type(error).__name__, error=str(error))
-        if directory is not None:
+        exit_code = 2
+    if directory is not None:
+        try:
             write_report(directory, report)
-        print(json.dumps(report, indent=2, allow_nan=False), file=sys.stderr)
-        return 2
+        except OSError as error:
+            write_error = {"error_type": type(error).__name__, "error": str(error)}
+            if exit_code == 2:
+                report["report_write_error"] = write_error
+            else:
+                report.update(status="runtime_error", **write_error)
+            exit_code = 2
+    print(json.dumps(report, indent=2, allow_nan=False), file=sys.stderr if exit_code == 2 else sys.stdout)
+    return exit_code
 
 
 if __name__ == "__main__":
