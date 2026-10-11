@@ -1,8 +1,9 @@
 # Linux SM75 build
 
 The known baseline is CUDA 12.6.3, GCC 13.2 and Ubuntu 24.04 x86-64. The
-container pins its base image and CMake/Ninja package versions. Building needs no
-GPU or NVIDIA container runtime. Running GPU tests requires an SM75 CUDA device.
+container pins its base image, CMake/Ninja package versions and Ubuntu archive
+snapshot `20261003T000000Z`. Building needs no GPU or NVIDIA container runtime.
+Running GPU tests requires an SM75 CUDA device.
 
 From `ports/cuda-compat`:
 

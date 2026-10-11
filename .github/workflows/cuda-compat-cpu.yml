@@ -15,6 +15,24 @@ permissions:
   contents: read
 
 jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned CUDA toolchain
+        run: docker build --tag opendlss-cuda-compat-build ports/cuda-compat/toolchain
+      - name: Compile SM75 native targets and run host tests
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE/ports/cuda-compat:/workspace" \
+            opendlss-cuda-compat-build bash -lc '
+              set -euo pipefail
+              cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CUDA_ARCHITECTURES=75 -DBUILD_TESTING=ON
+              cmake --build build --parallel 4
+              ctest --test-dir build -L host --no-tests=error --output-on-failure
+            '
   python:
     runs-on: ubuntu-24.04
     strategy:
