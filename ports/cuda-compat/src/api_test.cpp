@@ -117,6 +117,23 @@ int main(int argc, char **argv) {
         checked(nr_create(&context.value, 6, 1));
         checked(nr_sync(context.value));
         context.close();
+        // Synchronizing a capturing stream is prohibited by CUDA and invalidates
+        // capture. Cover both explicit end and destruction of that invalid state.
+        for (bool end_first : {false, true}) {
+            checked(nr_create(&context.value, 6, 1));
+            checked(nr_capture_begin(context.value));
+            require(nr_sync(context.value) != 0 &&
+                        std::strcmp(nr_error(), cudaGetErrorString(cudaErrorStreamCaptureUnsupported)) == 0,
+                    "Captured synchronization did not fail through CUDA");
+            if (end_first)
+                require(nr_capture_end(context.value) != 0 &&
+                            std::strcmp(nr_error(), cudaGetErrorString(cudaErrorStreamCaptureInvalidated)) == 0,
+                        "Capture end did not report invalidation");
+            context.close();
+            checked(nr_create(&context.value, 6, 1));
+            checked(nr_sync(context.value));
+            context.close();
+        }
         std::cout << "{\"status\":\"pass\",\"gpu_executed\":true,\"abi_version\":1,\"thread_"
                      "rejection\":true,\"device_switch_tested\":"
                   << (devices > 1 ? "true" : "false") << ",\"capture_abort_and_reopen\":true}\n";

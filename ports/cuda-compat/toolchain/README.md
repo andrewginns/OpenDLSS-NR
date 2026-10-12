@@ -5,6 +5,13 @@ container pins its base image, CMake/Ninja package versions and Ubuntu archive
 snapshot `20261003T000000Z`. Building needs no GPU or NVIDIA container runtime.
 Running GPU tests requires an SM75 CUDA device.
 
+nvcc's host compiler must use the selected C++ compiler invocation path. Use
+matching `CXX` and `CMAKE_CUDA_HOST_COMPILER`/`CUDAHOSTCXX`. Direct `-ccbin`
+overrides, C++ compiler-command suffixes and opaque options/response files are
+rejected. nvcc environment flags
+are checked and recorded at configure time; the compile launcher rejects unsafe
+flags or changed environment inputs.
+
 From `ports/cuda-compat`:
 
 ```sh

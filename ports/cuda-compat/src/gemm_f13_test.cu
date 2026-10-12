@@ -341,8 +341,14 @@ int full_fixtures(const std::string &directory, bool gpu, cudaStream_t stream) {
                         value = 0;
                     }
                 }
-                same_float(partition ? total : value, expected_wide[at], "CPU independent matrix",
+                const float retained = partition ? total : value;
+                same_float(retained, expected_wide[at], "CPU independent matrix",
                            at);
+                if (nr::halfBits(nr::browserHalfRtz(retained)) != nr::halfBits(expected_raw[at]))
+                    throw std::runtime_error("CPU independent raw FP16 mismatch");
+                if (nr::browserE4Code(retained) != codes[at] ||
+                    nr::halfBits(nr::browserPublishE4(retained)) != nr::halfBits(expected[at]))
+                    throw std::runtime_error("CPU independent E4 output mismatch");
             }
         if (gpu) {
             Device<H> da(a.size()), dw(w.size()), dr(res.size()), ds(scale.size()),

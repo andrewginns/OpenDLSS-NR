@@ -1,6 +1,6 @@
 """Padded-token capture/replay smoke for Compute Sanitizer; needs model and SM75.
 
-Checks determinism and captured/uncaptured heads, not independent reference parity.
+Checks replay determinism with boundary recording on/off, not eager or reference parity.
 """
 import argparse
 from pathlib import Path
@@ -31,7 +31,7 @@ def main():
                     if expected is None:
                         expected = head.copy()
                     if not np.array_equal(head.view("uint32"), expected.view("uint32")):
-                        raise RuntimeError("Captured/replayed head differs")
+                        raise RuntimeError("Boundary-recording/replayed head differs")
                     if capture and len(backend.read_boundaries()) != 75:
                         raise RuntimeError("Missing graph boundaries")
         print(f"{width}x{height}: padded tokens, capture and replay completed", flush=True)

@@ -22,7 +22,7 @@ Python 3.10 and 3.12. GPU execution was tested on one SM75 device.
 An external eight-frame temporal smoke also matched the accepted CUDA backend's
 heads, composed output and history exactly; it covered initialization, with no scene cuts.
 
-The 2026-10-12 follow-up passed 73 CPU tests on Linux, including selected-root
+The earlier 2026-10-12 follow-up passed 73 CPU tests on Linux, including selected-root
 and child-symlink cases; Windows passed with four symlink-permission skips.
 The offline pinned-toolchain build and eight host CTest groups passed, including
 compiler-flag configure regressions. No new GPU checks ran for this follow-up.
@@ -92,6 +92,35 @@ compute-sanitizer --tool initcheck --error-exitcode 99 python \
   ports/cuda-compat/tools/sanitizer_smoke.py --model /path/to/cache --library /path/to/libnr_cuda.so
 ```
 
-The smoke covers 512x512 and 1280x720 with production/captured contexts and graph
-replay. These added sanitizer cases have not run; the GPU host was unreachable
-on 2026-10-12. They check memory safety and consistency, not reference parity.
+The smoke covers 512x512 and 1280x720 with graph replay in contexts with boundary
+recording off/on; it does not compare eager execution. The GPU host was initially
+unreachable on 2026-10-12; after it returned online, both memcheck and initcheck
+completed both shapes with zero errors. They check memory safety and consistency,
+not reference parity.
+
+The later local compiler/environment, receipt, GEMM epilogue and API additions
+compiled in the offline pinned toolchain; all eight host groups passed. The 182
+configure/build cases also passed under an inherited benign nvcc environment.
+The receipt matched the host path in all seven CUDA compile commands. Host GEMM
+checks covered raw FP16 and E4 outputs against independent fixture witnesses.
+The later 2026-10-12 GPU run passed all seven regression groups on the RTX 2060
+Mobile (SM75), including invalidated-capture end/cleanup/reopen. The fresh build
+matched all 75 boundaries and the complete head of the 320x320 browser fixture;
+ten production replays and the instrumented head agreed exactly. API memcheck
+reported zero memory errors and zero leaked bytes. For this deliberate-error API
+test only, API error reporting was disabled: the target itself asserts capture
+errors 900/901 and rejects unexpected statuses. Padded-shape memcheck and initcheck
+also passed with zero errors using normal API error reporting, with boundary
+recording off/on and two head calls per context. Memcheck took 1071 seconds and
+initcheck took 432 seconds.
+
+The tested native source SHA256 was
+`33bc9e61cb128d6b0716736e20b278c3f366de98008cd9f6a57c91a499e7f3f0`, and the
+library SHA256 was
+`21d1055be040491bb6a062b7cb493682b3cd750f03a3b85c281ab2129165a594`.
+Only one GPU was available, so the API device-switch case did not run.
+The maximum sampled temperature was 70 C; after validation the GPU returned to
+P8 with 9 MiB in use. No new Xid, OOM, hardware-error or hung-task messages were
+observed during the validation window. Existing driver assertion messages were
+present before testing; this run does not establish their cause or resolve the
+earlier host outage. No power, driver or other host settings were changed.
