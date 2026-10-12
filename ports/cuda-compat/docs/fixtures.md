@@ -46,8 +46,9 @@ this port. The small numeric fixtures described below are not such a pack.
 ## Available manifest
 
 Pass either `fixture.json` or its directory. All tensor files are relative to
-that directory. Symlinks, absolute paths, parent traversal, duplicate JSON
-keys, unknown fields, nonfinite data and incorrect hashes are rejected.
+that directory. The selected directory is resolved; child symlinks, absolute
+paths, parent traversal, duplicate JSON keys, unknown fields, nonfinite data and
+incorrect hashes are rejected.
 Individual files are limited to 128 MiB and the complete pack to 512 MiB.
 Use a small complete capture, such as the 320 by 320 field, for this bounded
 all-boundary test. It is not a head-only quality-corpus runner.

@@ -126,6 +126,48 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual([x.calls for x in self.instances], [3, 1])
         self.assertTrue(all(x.closed for x in self.instances))
 
+    def symlink(self, link, target):
+        try:
+            link.symlink_to(target, target_is_directory=target.is_dir())
+        except OSError:
+            self.skipTest("Symlink creation unavailable")
+
+    def test_selected_roots_and_ancestors_can_be_symlinked(self):
+        self.manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            alias = Path(directory) / "fixture"
+            self.symlink(alias, self.root)
+            self.assertEqual(f.load_fixture(alias).path, self.manifest().resolve())
+            self.assertEqual(f.load_fixture(alias / "fixture.json").geometry, self.geometry)
+            self.assertEqual(f._model_identity(alias / "model", self.base["model"]), self.base["model"])
+            model_alias = Path(directory) / "model"
+            self.symlink(model_alias, self.model)
+            self.assertEqual(f._model_identity(model_alias, self.base["model"]), self.base["model"])
+
+    def test_child_file_and_directory_symlinks_rejected(self):
+        with tempfile.TemporaryDirectory(dir=self.root) as directory:
+            child = Path(directory)
+            self.symlink(child / "features.npy", self.root / "features.npy")
+            self.symlink(child / "nested", self.root)
+            for name in (f"{child.name}/features.npy", f"{child.name}/nested/features.npy"):
+                self.metadata["features"]["file"] = name
+                with self.assertRaises(ValueError):
+                    self.parity()
+            self.assertEqual(self.instances, [])
+
+    def test_manifest_and_model_child_symlinks_rejected(self):
+        with tempfile.TemporaryDirectory(dir=self.root) as directory:
+            child = Path(directory)
+            self.symlink(child / "fixture.json", self.manifest())
+            with self.assertRaises(ValueError):
+                f.load_fixture(child)
+            self.symlink(child / "manifest.json", self.model / "manifest.json")
+            with self.assertRaises(ValueError):
+                f._model_identity(child, self.base["model"])
+            self.symlink(child / "weights.bin", self.model / "weights.bin")
+            with self.assertRaises(ValueError):
+                f._file(child, "weights.bin")
+
     def test_head_signed_zero_is_mismatch(self):
         def mutate(_, value):
             if isinstance(value, np.ndarray):

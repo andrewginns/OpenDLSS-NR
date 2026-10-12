@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
+include(cmake/CheckArithmeticFlags.cmake)
+nr_check_arithmetic_flags()
 project(opendlss_cuda_compat VERSION 0.1.0 LANGUAGES CXX)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
   message(FATAL_ERROR "The CUDA compatibility port supports Linux x86-64 only")
@@ -18,6 +20,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 find_package(CUDAToolkit 12.6 REQUIRED)
 find_package(Threads REQUIRED)
+nr_check_arithmetic_flags()
 
 # This list is also the native source identity. Changes to any member trigger
 # reconfiguration; the generated identity header is excluded from its own hash.
@@ -25,7 +28,7 @@ set(native_sources
   src/runtime.cu src/kernels/numerics/numerics.cuh src/browser_numerics.cuh
   src/f16_compat.cuh src/attention_f13.cuh src/f13_dot.cuh src/gemm_f13.cuh
   src/window_f13_fused.cuh src/window_common.cuh
-  include/nr_cuda.h CMakeLists.txt toolchain/nr_build_info.h.in)
+  include/nr_cuda.h CMakeLists.txt cmake/CheckArithmeticFlags.cmake toolchain/nr_build_info.h.in)
 set(source_inventory "")
 foreach(path IN LISTS native_sources)
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${path}" digest)
@@ -38,9 +41,6 @@ set(config_text "source=${NR_SOURCE_SHA256};cuda=${CMAKE_CUDA_COMPILER_ID}-${CMA
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
   string(APPEND config_text ";cuda_${config}=${CMAKE_CUDA_FLAGS_${config}};cxx_${config}=${CMAKE_CXX_FLAGS_${config}}")
 endforeach()
-if(config_text MATCHES "--use_fast_math|--ftz[= ]+true|-ffast-math|/fp:fast")
-  message(FATAL_ERROR "Fast-math and FTZ alter the compatibility arithmetic")
-endif()
 string(SHA256 NR_CONFIGURATION_SHA256 "${config_text}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/native-build-config.txt" "${config_text}\n")
 configure_file(toolchain/nr_build_info.h.in generated/nr_build_info.h @ONLY)
@@ -55,6 +55,10 @@ install(FILES include/nr_cuda.h DESTINATION include)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME host-compiler-flags COMMAND ${CMAKE_COMMAND}
+    -DNR_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR} -DNR_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/flag-tests
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_compiler_flags.cmake)
+  set_tests_properties(host-compiler-flags PROPERTIES LABELS host TIMEOUT 180)
   function(numeric_target name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE include)

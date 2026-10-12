@@ -16,9 +16,16 @@ CUDA 12.6.3, GCC 13.2 and `--ftz=false`; its CUDA dependency is the CUDA 12 runt
 | Compute Sanitizer | API and complete 320×320 network checks reported zero memory errors and zero leaks. |
 
 The Windows Python 3.11 CPU suite ran 70 tests with one symlink-permission skip.
-The hosted CI workflow has not run. GPU execution was tested on one SM75 device.
+[Hosted CI](https://github.com/andrewginns/OpenDLSS-NR/actions/runs/38160084890)
+passed at `3ed7ba8`: native compilation, seven host groups and all 70 tests on
+Python 3.10 and 3.12. GPU execution was tested on one SM75 device.
 An external eight-frame temporal smoke also matched the accepted CUDA backend's
 heads, composed output and history exactly; it covered initialization, with no scene cuts.
+
+The 2026-10-12 follow-up passed 73 CPU tests on Linux, including selected-root
+and child-symlink cases; Windows passed with four symlink-permission skips.
+The offline pinned-toolchain build and eight host CTest groups passed, including
+compiler-flag configure regressions. No new GPU checks ran for this follow-up.
 
 The corpus uses existing development inputs. These results establish the
 `browser-compat-v1` contract for the recorded inputs. **Original/Vulkan
@@ -39,7 +46,8 @@ validation was 2,082 MiB. The configured power limit was
 
 The reference used Chrome 153.0.8010.52 with `vulkan_enable_f16_on_nvidia`.
 Operator fixture provenance and regeneration are documented in [fixtures.md](fixtures.md).
-SHA256 identities for the tested build:
+SHA256 identities for the historical 2026-10-04 tested build (before the later
+compiler-flag and fixture-path changes):
 
 - Native source inventory: `33c68618c0a9167b871ff0dbc74d57f91c3ef31a50b2ced1543375a42b3b4a92`
 - Shared library: `2733e837989af26c1bb567506fffa063524affa2a9a634b136d6bb1ac5c5c734`
@@ -74,3 +82,16 @@ python -m opendlss_cuda bench \
 The source distribution includes public operator fixtures. Full-network captures,
 model weights and private development images are supplied separately. An
 unavailable reference produces `unavailable`, never a passing parity result.
+
+For padded-token memory checks, run both tools on the supported GPU host:
+
+```sh
+compute-sanitizer --tool memcheck --error-exitcode 99 python \
+  ports/cuda-compat/tools/sanitizer_smoke.py --model /path/to/cache --library /path/to/libnr_cuda.so
+compute-sanitizer --tool initcheck --error-exitcode 99 python \
+  ports/cuda-compat/tools/sanitizer_smoke.py --model /path/to/cache --library /path/to/libnr_cuda.so
+```
+
+The smoke covers 512x512 and 1280x720 with production/captured contexts and graph
+replay. These added sanitizer cases have not run; the GPU host was unreachable
+on 2026-10-12. They check memory safety and consistency, not reference parity.

@@ -15,6 +15,7 @@ import re
 import numpy as np
 
 from .geometry import block_schedule, geometry_from_valid, require_supported_geometry
+from .export_model import regular_file
 
 FORMAT = "opendlss-cuda-feature-fixture-v1"
 POLICY = "browser-compat-v1"
@@ -80,9 +81,10 @@ def _file(root, name, maximum=MAX_FILE_BYTES):
     _require(not part.is_absolute() and part.as_posix() == name and
              not any(x in (".", "..") for x in part.parts) and "\\" not in name and ":" not in name,
              "Unsafe fixture filename")
-    path = root.joinpath(*part.parts)
-    _require(not any(p.is_symlink() for p in (path, *path.parents)), "Symlink fixture path")
-    _require(path.is_file() and path.resolve().is_relative_to(root.resolve()), "Missing or escaped fixture file")
+    try:
+        path = regular_file(root, name)
+    except OSError as error:
+        raise ValueError(f"Missing or unsafe fixture file: {name}") from error
     _require(0 < path.stat().st_size <= maximum, "Empty or oversized fixture file")
     return path
 
@@ -181,7 +183,7 @@ def load_fixture(path):
     path = Path(path)
     if path.is_dir():
         path = path / "fixture.json"
-    _require(not any(p.is_symlink() for p in (path, *path.parents)), "Symlink manifest path")
+    path = _file(path.parent, path.name, 2 << 20)
     value = _read_json(path)
     _require(isinstance(value, dict) and value.get("format") == FORMAT, "Unsupported fixture format")
     if value.get("availability") == "unavailable":
