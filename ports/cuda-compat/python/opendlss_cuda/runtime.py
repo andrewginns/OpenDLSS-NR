@@ -14,6 +14,30 @@ from pathlib import Path
 import numpy as np
 
 
+_library_hashes = {}
+_library_load_lock = threading.Lock()
+
+
+def _load_library(path):
+    # Context close does not unload a CDLL; glibc can retain its pathname handle.
+    with _library_load_lock:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if path in _library_hashes and _library_hashes[path] != digest:
+            raise RuntimeError(
+                "Native library changed at a loaded path; use a distinct filename or restart Python"
+            )
+        lib = C.CDLL(str(path))
+        _library_hashes[path] = digest
+        try:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise RuntimeError("Native library changed while loading; restart Python")
+        except BaseException:
+            # Its loaded handle may describe either file: do not trust this path again.
+            _library_hashes[path] = None
+            raise
+        return lib, digest
+
+
 class Tensor:
     def __init__(self, owner, pointer, shape, dtype):
         self.owner = owner
@@ -43,8 +67,7 @@ class Runtime:
         self.library_path = Path(path).resolve(strict=True)
         if not self.library_path.is_file():
             raise ValueError("Native library must be a regular file")
-        self.library_sha256 = hashlib.sha256(self.library_path.read_bytes()).hexdigest()
-        self.lib = C.CDLL(str(self.library_path))
+        self.lib, self.library_sha256 = _load_library(self.library_path)
         try:
             self.lib.nr_abi_version.argtypes = []
             self.lib.nr_abi_version.restype = C.c_uint32

@@ -57,6 +57,9 @@ The Python wheel contains the Python interface. Build the native library
 separately and pass its absolute path. Make the installed CUDA runtime
 available to the Linux loader using its normal search configuration or
 `LD_LIBRARY_PATH`. The source contribution does not redistribute these libraries.
+Keep a loaded library pathname unchanged for the lifetime of the Python process.
+To load a rebuilt library, use a distinct filename or restart Python; closing a
+context does not unload its shared library.
 
 ## Convert weights
 

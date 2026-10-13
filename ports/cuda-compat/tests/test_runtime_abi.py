@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -108,6 +110,57 @@ class RuntimeABITests(unittest.TestCase):
         self.assertEqual(runtime.context_options, {'policy': 'browser-compat-v1', 'native_policy_id': 6,
                          'abi_version': 1, 'window_impl': 'staged'})
         self.assertEqual(next(args[1:] for name, args in fake.calls if name == 'nr_create'), (6, 0))
+
+    def test_changed_library_is_rejected_before_native_creation(self):
+        runtime, _ = self.make()
+        runtime.close()
+        self.path.write_bytes(b'rebuilt library')
+        with mock.patch.object(module.C, 'CDLL') as loader:
+            with self.assertRaisesRegex(RuntimeError, 'distinct filename or restart Python'):
+                module.Runtime(self.path)
+            loader.assert_not_called()
+
+    def test_change_during_loading_keeps_path_untrusted(self):
+        original = self.path.read_bytes()
+        def load(_):
+            self.path.write_bytes(b'replacement during load')
+            return FakeLibrary()
+        with mock.patch.object(module.C, 'CDLL', side_effect=load):
+            with self.assertRaisesRegex(RuntimeError, 'changed while loading'):
+                module.Runtime(self.path)
+        self.path.write_bytes(original)
+        with mock.patch.object(module.C, 'CDLL') as loader:
+            with self.assertRaisesRegex(RuntimeError, 'changed at a loaded path'):
+                module.Runtime(self.path)
+            loader.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('cc'),
+                         'Requires Linux dlopen and a C compiler')
+    def test_actual_dlopen_replacement_is_rejected_but_new_path_loads(self):
+        libraries = []
+        for value in (1, 2):
+            source = Path(self.temp.name) / f'probe{value}.c'
+            library = Path(self.temp.name) / f'probe{value}.so'
+            source.write_text(f'int probe(void) {{ return {value}; }}\n')
+            subprocess.run(['cc', '-shared', '-fPIC', str(source), '-o', str(library)],
+                           check=True, capture_output=True)
+            libraries.append(library)
+        os.replace(libraries[0], self.path)
+        first, _ = module._load_library(self.path)
+        first.probe.restype = C.c_int
+        same, _ = module._load_library(self.path)
+        self.assertEqual(first._handle, same._handle)
+        self.assertEqual(first.probe(), 1)
+        replacement_bytes = libraries[1].read_bytes()
+        os.replace(libraries[1], self.path)
+        with self.assertRaisesRegex(RuntimeError, 'changed at a loaded path'):
+            module._load_library(self.path)
+        unique = Path(self.temp.name) / 'replacement.so'
+        unique.write_bytes(replacement_bytes)
+        second, digest = module._load_library(unique)
+        second.probe.restype = C.c_int
+        self.assertEqual(second.probe(), 2)
+        self.assertEqual(digest, hashlib.sha256(replacement_bytes).hexdigest())
 
     def test_abi_and_identity_rejection_precede_creation(self):
         cases = []
