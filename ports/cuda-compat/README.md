@@ -10,8 +10,7 @@ publication and F13/F24 reductions to reproduce the pinned browser behavior.
 Native FP8 instructions are not required. The supported arithmetic is
 `browser-compat-v1`; see [the numerical contract](docs/arithmetic.md).
 
-The port is independent of the Vulkan executable and Filament demo. Current
-validation status and tested configurations are in [validation.md](docs/validation.md).
+The port is independent of the Vulkan executable and Filament demo.
 
 ## Requirements
 
@@ -39,6 +38,20 @@ python3 -m venv /path/to/new-venv
 python -m pip install ./ports/cuda-compat
 python -m opendlss_cuda info --library "$PWD/ports/cuda-compat/build/libnr_cuda.so"
 ```
+
+For the tested CUDA 12.6.3/GCC 13.2 baseline, `toolchain/Dockerfile` pins the
+CUDA image and Ubuntu package snapshot. Build and run host tests from this port:
+
+```sh
+docker build -t opendlss-cuda-compat-build toolchain
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" \
+  opendlss-cuda-compat-build bash -lc \
+  'cmake -S . -B build -G Ninja && cmake --build build -j4 && ctest --test-dir build -L host --output-on-failure'
+```
+
+nvcc's host compiler must match the selected C++ compiler invocation. Compiler
+suffixes, opaque response files, unsafe arithmetic flags and changed nvcc
+environment inputs are rejected. `BUILD_TESTING=OFF` builds only the library.
 
 The Python wheel contains the Python interface. Build the native library
 separately and pass its absolute path. Make the installed CUDA runtime
@@ -91,16 +104,12 @@ with Backend("/path/to/cache", "/path/to/libnr_cuda.so", 1280, 720) as backend:
     print(backend.last_metrics)
 ```
 
-## Check parity and measure calls
+## Check parity
 
 ```sh
 python -m opendlss_cuda parity \
   --model /path/to/cache --library /path/to/libnr_cuda.so \
   --fixture /path/to/independent-fixture --replays 3 --out /path/to/new-parity
-python -m opendlss_cuda bench \
-  --model /path/to/cache --library /path/to/libnr_cuda.so \
-  --features /path/to/features.npy --width 1280 --height 720 \
-  --warmups 10 --calls 20 --out /path/to/new-benchmark
 ```
 
 Parity requires independently recorded expected values, all declared boundaries,
@@ -109,19 +118,25 @@ the full head and consistent production/capture replays. See the
 mismatch, 2 for invalid input or runtime failure, and 3 for an unavailable reference.
 Unavailable original-network captures never establish original/Vulkan parity.
 
-Benchmarks report CUDA-event time separately from the public call through host
-readback. Startup, warmup, hashing and output writing are identified separately.
-The command checks output determinism outside each timed interval.
-
 ## Tests
 
 ```sh
 python -m unittest discover -s ports/cuda-compat/tests -p 'test_*.py' -v
+python ports/cuda-compat/tools/generate_numeric_fixtures.py --verify ports/cuda-compat/tests/fixtures
+ctest --test-dir ports/cuda-compat/build -L host --output-on-failure
+ctest --test-dir ports/cuda-compat/build -L gpu --output-on-failure
 ```
 
 CPU tests require no weights or GPU. Native tests have separate host and GPU
-labels in CTest; GPU acceptance requires the actual device and independently
-prepared model/fixtures. A skipped device test is not a passing GPU result.
+labels in CTest; GPU tests require the actual device. Full-network parity also
+requires independently prepared model/fixtures. Padded-shape memory checks use
+`tools/sanitizer_smoke.py` under Compute Sanitizer's `memcheck` and `initcheck`.
+
+The tested Linux SM75 configuration passed CPU/native tests, exact browser
+fixture head and boundary comparisons, and padded-shape sanitizer checks on one
+RTX 2060. Original/Vulkan full-network parity and image-quality equivalence
+remain unverified. The numerical reference and fixture provenance are described
+in [arithmetic.md](docs/arithmetic.md) and [fixtures.md](docs/fixtures.md).
 
 See [third-party notices](THIRD_PARTY_NOTICES.md) for source attribution and
 native dependency terms.

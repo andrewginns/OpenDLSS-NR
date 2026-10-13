@@ -1,4 +1,4 @@
-"""Convert weights, run prepared features, check parity and measure inference.
+"""Convert weights, run prepared features and check parity.
 
 The output is an RGB residual plus blend logit, not a composed image.
 """
@@ -91,12 +91,6 @@ def _receipt(args, backend, features):
     }
 
 
-def _stats(values):
-    return {"count": len(values), "minimum": float(np.min(values)),
-            "median": float(np.median(values)), "p95": float(np.percentile(values, 95)),
-            "maximum": float(np.max(values))}
-
-
 def _run(args):
     from .backend import Backend
     geometry = _geometry(args)
@@ -105,43 +99,16 @@ def _run(args):
     with Backend(args.model, args.library, args.width, args.height, geometry=args.geometry) as backend:
         setup_seconds = time.perf_counter() - created
         receipt = _receipt(args, backend, features)
-        if args.command == "run-features":
-            head = backend.run_features(features)
-            metrics = dict(backend.last_metrics)
-            partial = args.out / "head.npy.partial"
-            with partial.open("xb") as stream:
-                np.save(stream, head, allow_pickle=False)
-            partial.replace(args.out / "head.npy")
-            return dict(receipt, status="completed", setup_seconds=setup_seconds,
-                        metrics=metrics, head={"file": "head.npy", "shape": list(head.shape),
-                        "dtype": str(head.dtype), "file_sha256": sha_file(args.out / "head.npy"),
-                        "array_sha256": sha_array(head)})
-        expected = None
-        initial_metrics = None
-        for index in range(args.warmups):
-            head = backend.run_features(features)
-            if index == 0:
-                expected = head.copy()
-                initial_metrics = dict(backend.last_metrics)
-            elif not np.array_equal(head.view(np.uint8), expected.view(np.uint8)):
-                raise RuntimeError("Nondeterministic warmup head")
-        timings = []
-        for _ in range(args.calls):
-            started = time.perf_counter()
-            head = backend.run_features(features)
-            elapsed = time.perf_counter() - started
-            row = dict(backend.last_metrics, public_call_seconds=elapsed)
-            timings.append(row)
-            # Comparison and receipt work are outside the timed public call.
-            if not np.array_equal(head.view(np.uint8), expected.view(np.uint8)):
-                raise RuntimeError("Nondeterministic measured head")
+        head = backend.run_features(features)
+        metrics = dict(backend.last_metrics)
+        partial = args.out / "head.npy.partial"
+        with partial.open("xb") as stream:
+            np.save(stream, head, allow_pickle=False)
+        partial.replace(args.out / "head.npy")
         return dict(receipt, status="completed", setup_seconds=setup_seconds,
-                    warmups=args.warmups, calls=args.calls, first_call=initial_metrics,
-                    public_call_seconds=_stats([r["public_call_seconds"] for r in timings]),
-                    gpu_ms=_stats([r["gpu_ms"] for r in timings]),
-                    head_array_sha256=sha_array(expected), samples=timings,
-                    timing_scope="Public calls include validation, upload, replay and readback. "
-                    "GPU milliseconds use CUDA events. Hashing and output I/O are outside calls.")
+                    metrics=metrics, head={"file": "head.npy", "shape": list(head.shape),
+                    "dtype": str(head.dtype), "file_sha256": sha_file(args.out / "head.npy"),
+                    "array_sha256": sha_array(head)})
 
 
 def _positive(value):
@@ -160,18 +127,14 @@ def parser():
     export.add_argument("--out", type=Path, required=True)
     info = commands.add_parser("info", help="Load the matching library and report its SM75 device")
     info.add_argument("--library", type=Path, required=True)
-    for name in ("run-features", "bench"):
-        command = commands.add_parser(name, help="Run prepared features" if name == "run-features" else "Measure repeated prepared-feature calls")
-        command.add_argument("--model", type=Path, required=True)
-        command.add_argument("--library", type=Path, required=True)
-        command.add_argument("--features", type=Path, required=True)
-        command.add_argument("--width", type=_positive, required=True)
-        command.add_argument("--height", type=_positive, required=True)
-        command.add_argument("--geometry", choices=("upstream", "legacy_belvedere"), default="upstream")
-        command.add_argument("--out", type=Path, required=True)
-        if name == "bench":
-            command.add_argument("--warmups", type=_positive, default=10)
-            command.add_argument("--calls", type=_positive, default=20)
+    command = commands.add_parser("run-features", help="Run prepared features")
+    command.add_argument("--model", type=Path, required=True)
+    command.add_argument("--library", type=Path, required=True)
+    command.add_argument("--features", type=Path, required=True)
+    command.add_argument("--width", type=_positive, required=True)
+    command.add_argument("--height", type=_positive, required=True)
+    command.add_argument("--geometry", choices=("upstream", "legacy_belvedere"), default="upstream")
+    command.add_argument("--out", type=Path, required=True)
     parity = commands.add_parser("parity", help="Require the fixture's exact head and all declared boundaries")
     parity.add_argument("--model", type=Path, required=True)
     parity.add_argument("--library", type=Path, required=True)
